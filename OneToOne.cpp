@@ -11,10 +11,10 @@ using namespace lm::ngram;
 Model model("10gram.wb.lm"); // read a 10-gram model
 
 
-#define N 10  // Amount of training observations
+#define N 32  // Amount of training observations
 #define D 2  // Dimensionality of a single vector 
 #define C 83  // Amount of classes ( letters in current case)
-#define M 8   // We will use m-gram language model
+#define M 2   // We will use m-gram language model
 
 // i/o functions
 void reading_file(double array[N][D],char* name);
@@ -36,6 +36,10 @@ void Baum_algorithm(double data[N][D]);
 // Learning functions
 double word_total_probability(double* word, int length);
 
+// Testing functions
+void primitive_decode();
+void debug();
+
 // Global Variables
 double Means[C][D]; 	// means of the classes
 double Variances[D]; 	// pooled variance
@@ -46,11 +50,24 @@ double P[N][C]; 	// prob(c/data) for the time step n
 
 int main()
 {
-	// create example observations
+	// create example observations : ien ien ien ien ...
 	double x[N][D];
+	// i =50, e  = 46, n = 55
 	for(int n=0;n<N;n++)
+	{
 		for(int d=0;d<D;d++)
-			x[n][d] = n; 
+		{		
+			if(n%3 ==0) x[n][d] = 50;
+			else if(n%3 ==1) x[n][d] = 46;
+			else x[n][d] = 55;
+		}
+	}
+
+	// Show the example data
+	std::cout<<" For debug we use the data : ";
+	for(int n=0;n<N;n++)
+		std::cout<<x[n][0]<<" ";
+	std::cout<<"\n";
 
 	// initialise parameters ( means and variances) and table Q
 	init_params();
@@ -58,9 +75,8 @@ int main()
 	// run forward part of the algorithm
 	Baum_algorithm(x);
 
-	// DEBUG
-	for(int c=0;c<C;c++)
-		std::cout<<c<<" value is "<<P[9][c]<<"\n";
+	// test
+	primitive_decode();
 	return 0;
 }
 
@@ -116,7 +132,7 @@ double emiss_prob(double x[D], int cl)
 		sum_for_exp += (x[d] - Means[cl][d]) * (x[d] - Means[cl][d]) / (Variances[d]*Variances[d]);
 		norm_fact*=  sqrt(2*M_PI) * Variances[d];
 	}
-	return -0.5*sum_for_exp + log(norm_fact);
+	return -0.5*sum_for_exp - log(norm_fact);
 }
 
 // ln of the unigram probability for a symbol
@@ -186,12 +202,8 @@ void forward(int n, int curr_char, double word[N][D])
 			std::cerr<<" Error! At time step "<<n-1<<" for class "<<prev_char<<" Q was not initialized, but forward algorithm tried to use it\n";
 		// We need to do summation in a logarithm space
 		sum = add_log_scores(sum, Q[n-1][prev_char] + trans_prob(prev_char, curr_char));  
-		//std::cout<<"Transition between "<<prev_char<<" and "<<curr_char<<" is "<<trans_prob(prev_char+4, curr_char+4)<<"\n";
 	}
-	//std::cout<<"The sum is : "<<sum<<"\n";
-	// I am adding 4 to the charecter value, since index(a) = 4
 	Q[n][curr_char] = emiss_prob(word[n],curr_char) + sum;
-	//std::cout<<"Q["<<n<<"]["<<curr_char<<"] = "<<Q[n][curr_char]<<"\n";
 }
 
 // Initialization of a table Q_tilda
@@ -199,9 +211,8 @@ void init_Q_tilda(double x[N][D])
 {
 /* input : training sequence */
 	
-	// At first time step we don't have predecessor, so we fall back to the unigram model
 	for(int cl=0;cl<C;cl++) // go over all classe
-		Q_tilda[N-1][cl]  = emiss_prob(x[N-1],cl) + unigram_score(cl);
+		Q_tilda[N-1][cl]  = pow(10, -300); // instead of 0 to avoid numerical problems
 
 	// All other values are initialized to -1 in order to see that it is not assigned the value yet
 	for(int n=0;n<N-1;n++)
@@ -215,21 +226,24 @@ void backward(int n, int curr_char, double word[N][D])
 {
 	if(n==N-1) // we can use initialization
 	{
-		if(Q[N-1][curr_char] == -1)
+		if(Q_tilda[N-1][curr_char] == -1)
 			std::cerr<<" Error! Q_tilda was not initialized, but backward algorithm has started";
 		return;
 	}
 
-	double sum = 0; 
+	double sum = pow(10,-300); // to avoid numerical problems 
 	// go over all possible characters
 	for(int next_char=0;next_char<C;next_char++)
 	{
 		//std::cout<<"Value for "<<prev_char<<" is "<<Q[n-1][prev_char]<<"\n";
-		sum = add_log_scores(sum, Q[n+1][next_char] + trans_prob(curr_char, next_char) + emiss_prob(word[n+1],next_char));  
-		// std::cout<<"Transition between "<<prev_char<<" and "<<curr_char<<" is "<<trans_prob(prev_char+4, curr_char+4)<<"\n";
+		sum = add_log_scores(sum, Q_tilda[n+1][next_char] + trans_prob(curr_char, next_char) + emiss_prob(word[n+1],next_char));  
+		if( n == N+1 && curr_char == 48)	
+		{
+			std::cout<<"For the next char "<<next_char<<" : Q prev = "<< Q_tilda[n+1][next_char]<<" trans prob ="<<trans_prob(curr_char, next_char)<<" emiss = "<<emiss_prob(word[n+1],next_char);  
+			std::cout<<"\nThe sum is "<<sum<<"\n";
+		}
 	}
-	// I am adding 4 to the charecter value, since index(a) = 4
-	Q[n][curr_char] = sum;
+	Q_tilda[n][curr_char] = sum;
 }
 
 void Baum_algorithm(double data[N][D])
@@ -247,10 +261,10 @@ void Baum_algorithm(double data[N][D])
 			backward(n,c,data);
 	//std::cout<<" Backward!\n";
 
-	// Calculate the probabilities
+	// Calculate the NOT-NORMALIZED log - probabilities
 	for(int n=0;n<N;n++) // go over all timespeps
 		for(int c=0;c<C;c++) // go over all characters
-			P[n][c] = Q[n][c] * Q_tilda[n][c];
+			P[n][c] = Q[n][c] + Q_tilda[n][c];
 
 }
 // Probability of a given word
@@ -259,4 +273,67 @@ double word_total_probability(double* word, int length)
 	double best=0;
 	// find the best value of the probability for a cymbol at the last position
 	return best;
+}
+
+void primitive_decode()
+{
+	double max_val; 
+	int max;
+	std::cout<<"Sequence of classes with the maximal score ";
+	for(int n=0;n<N;n++) // for each time step
+	{
+		max_val=P[n][0];
+		max = 0;
+		for(int c=1;c<C;c++)
+		{
+			// let's check Q now
+			if(P[n][c] > max_val)
+			{
+				max_val = P[n][c];
+				max = c;
+			}
+		}
+		// print the most probable class
+		std::cout<<max<<" ";
+	}
+	std::cout<<"\n";
+}
+
+
+void debug()
+{
+	// DEBUG table Q
+	// Find the highest prob at the last time-step
+	double max_val=Q[N-1][0];
+	int max=0;
+	for(int c=1;c<C;c++)
+	{
+		// let's check Q now
+		if(Q[N-1][c] > max_val)
+		{
+			max_val = Q[N-1][c];
+			max = c;
+		}
+		// print probabilities
+		//std::cout<<"Prob of class "<<c<<" at the last time step is "<<Q[N-1][c]<<"\n";
+	}
+	std::cout<<"Q gives the most probable class for the last timestep : "<<max<<" with the probability "<<max_val<<".\n";
+
+	// DEBUG table Q_tilda
+	// Find the highest prob at the first time-step
+	int time_step = 1;
+	max_val = Q_tilda[time_step][0];
+	max=0;
+	for(int c=1;c<C;c++)
+	{
+		// let's check Q_tilda now
+		if(Q_tilda[time_step][c] > max_val) 
+		{
+			max_val = Q_tilda[time_step][c];
+			max = c;
+		}
+		// print probabilities
+		// std::cout<<c<<" Q_tilda value for time step = "<<time_step<<" is "<<Q_tilda[time_step][c]<<"\n";
+	}
+	std::cout<<"Q_tilda gives the most probable class for the time step "<<time_step<<" : "<<max<<" with the probability "<<max_val<<".\n";
 }
