@@ -11,7 +11,7 @@ using namespace lm::ngram;
 Model model("10gram.wb.lm"); // read a 10-gram model
 
 
-#define N 32  // Amount of training observations
+#define N 22  // Amount of training observations
 #define D 2  // Dimensionality of a single vector 
 #define C 83  // Amount of classes ( letters in current case)
 #define M 2   // We will use m-gram language model
@@ -201,16 +201,20 @@ void forward(int n, int curr_char, double word[N][D])
 			std::cerr<<" Error! Q was not initialized, but forward algorithm has started";
 		return;
 	}
-
-	double sum = 0; 
-	// go over all possible characters
-	for(int prev_char=0;prev_char<C;prev_char++)
+	
+	// in order to avoid numerical problems
+	// we assign the sum to the first term
+	double sum = Q[n-1][0] + trans_prob(0, curr_char);  
+	// sum over all other characters
+	for(int prev_char=1;prev_char<C;prev_char++)
 	{
 		//std::cout<<"Value for "<<prev_char<<" is "<<Q[n-1][prev_char]<<"\n";
 		if(Q[n-1][prev_char] == -1)
 			std::cerr<<" Error! At time step "<<n-1<<" for class "<<prev_char<<" Q was not initialized, but forward algorithm tried to use it\n";
 		// We need to do summation in a logarithm space
 		sum = add_log_scores(sum, Q[n-1][prev_char] + trans_prob(prev_char, curr_char));  
+		//if(n==N-1 && curr_char ==50) 
+		//	std::cout<<"Sum is "<<sum<<"\n"; 
 	}
 	Q[n][curr_char] = emiss_prob(word[n],curr_char) + sum;
 }
@@ -240,13 +244,15 @@ void backward(int n, int curr_char, double word[N][D])
 		return;
 	}
 
-	double sum = pow(10,-300); // to avoid numerical problems 
-	// go over all possible characters
-	for(int next_char=0;next_char<C;next_char++)
+	// in order to avoid numerical problems
+	// we assign the sum to the first term
+	double sum = Q_tilda[n+1][0] + trans_prob(curr_char, 0) + emiss_prob(word[n+1],0);  
+	// sum over all other characters
+	for(int next_char=1;next_char<C;next_char++)
 	{
 		//std::cout<<"Value for "<<prev_char<<" is "<<Q[n-1][prev_char]<<"\n";
 		sum = add_log_scores(sum, Q_tilda[n+1][next_char] + trans_prob(curr_char, next_char) + emiss_prob(word[n+1],next_char));  
-		if( n == N+1 && curr_char == 48)	
+		if( n == N+2 && curr_char == 48)	
 		{
 			std::cout<<"For the next char "<<next_char<<" : Q prev = "<< Q_tilda[n+1][next_char]<<" trans prob ="<<trans_prob(curr_char, next_char)<<" emiss = "<<emiss_prob(word[n+1],next_char);  
 			std::cout<<"\nThe sum is "<<sum<<"\n";
