@@ -34,9 +34,11 @@ void backward(int n, int c, double word[N][D]);
 void Baum_algorithm(double data[N][D]); 
 
 // Learning functions
-double word_total_probability(double* word, int length);
+void EM(double data[N][D], int iterNumb);
+double word_total_probability(double word[N][D]);
 
 // Testing functions
+void test_prob_norm();
 void primitive_decode();
 void debug();
 
@@ -62,6 +64,7 @@ int main()
 			else x[n][d] = 55;
 		}
 	}
+	x[5][0] = 35; x[5][1] = 35; // just to make training data more interesting
 
 	// Show the example data
 	std::cout<<" For debug we use the data : ";
@@ -75,8 +78,14 @@ int main()
 	// run forward part of the algorithm
 	Baum_algorithm(x);
 
+	// Do Expectation - Maximization
+	//EM(x, 2);
+
 	// test
-	primitive_decode();
+	std::cout<<"The probablity of the word :"<< word_total_probability(x)<<"\n";
+	test_prob_norm();
+
+	//primitive_decode();
 	return 0;
 }
 
@@ -246,6 +255,9 @@ void backward(int n, int curr_char, double word[N][D])
 	Q_tilda[n][curr_char] = sum;
 }
 
+// Forward-backward algorithm, which will compute probabilities of each class C at time-step t given input sequence data
+// It is calucaled in log-space ! 
+// It will be writen into P[t][C] ( it is a global array)
 void Baum_algorithm(double data[N][D])
 {
 	// Do forward path
@@ -267,39 +279,83 @@ void Baum_algorithm(double data[N][D])
 			P[n][c] = Q[n][c] + Q_tilda[n][c];
 
 }
-// Probability of a given word
-double word_total_probability(double* word, int length)
-{
-	double best=0;
-	// find the best value of the probability for a cymbol at the last position
-	return best;
-}
 
-void primitive_decode()
+/* 						Learning 						*/
+
+// Expectation Maximization algorithm
+void EM(double data[N][D], int iterNumb)
 {
-	double max_val; 
-	int max;
-	std::cout<<"Sequence of classes with the maximal score ";
-	for(int n=0;n<N;n++) // for each time step
+	double sum, normalization;
+	for(int iter = 0; iter<iterNumb; iter++)
 	{
-		max_val=P[n][0];
-		max = 0;
-		for(int c=1;c<C;c++)
+		// Debug
+		std::cout<<"Means : ";
+		for(int c=0;c<C;c++)
+			std::cout<<Means[c][0]<<" ";
+		std::cout<<"\n";
+
+		// first - get probabilities Pt(c / x1_N)
+		Baum_algorithm(data);
+		
+		// then - reestimate means
+		for(int c=0;c<C;c++) // for all classes
 		{
-			// let's check Q now
-			if(P[n][c] > max_val)
+			// Calculate normalization sum
+			normalization = 0;
+			for(int t=0;t<N;t++) // go over all time-steps
+				normalization = normalization + exp(P[t][c]);
+			// Calculate the sum for the new mean
+			for(int d=0;d<D;d++) // for all dimensions
 			{
-				max_val = P[n][c];
-				max = c;
+				sum = 0;
+				for(int t=0;t<N;t++) // go over all time-steps
+					sum = sum + exp(P[t][c]) * data[t][d];
+				Means[c][d] = sum / normalization;
 			}
 		}
-		// print the most probable class
-		std::cout<<max<<" ";
+
+		// finally reestimate gaussians
+		for(int d=0;d<D;d++)
+		{
+			sum = 0;
+			for(int c=0;c<N;c++) // for all classes
+				for(int t=0;t<N;t++) // go over all time-steps
+					sum = sum + exp(P[t][c]) * (data[t][d] - Means[c][d])*(data[t][d] - Means[c][d]);
+			
+			Variances[d] = sum / N;
+		}	
 	}
-	std::cout<<"\n";
+}
+			
+	
+// Probability of a given word
+double word_total_probability(double word[N][D])
+{
+	double sum=0;
+	for(int c=0;c<C;c++)
+		sum = sum + exp(P[N-1][c]);
+	return sum;
 }
 
 
+/* 					Testing and Debuging						*/
+
+// Test if our probability distrubution for classes is normalized
+void test_prob_norm()
+{
+	double sum;
+	std::cout<<"I am testing the normalization of the probability distribution ...\n";
+	for(int n=0;n<N;n++)
+	{
+		sum = 0;
+		for(int c=0;c<C;c++)
+			sum = sum + exp(P[n][c]);
+		std::cout<<sum<<"\n";
+	}
+}
+		
+
+// Was used to debug a Forward - Backward algorithm
 void debug()
 {
 	// DEBUG table Q
@@ -336,4 +392,28 @@ void debug()
 		// std::cout<<c<<" Q_tilda value for time step = "<<time_step<<" is "<<Q_tilda[time_step][c]<<"\n";
 	}
 	std::cout<<"Q_tilda gives the most probable class for the time step "<<time_step<<" : "<<max<<" with the probability "<<max_val<<".\n";
+}
+
+void primitive_decode()
+{
+	double max_val; 
+	int max;
+	std::cout<<"Sequence of classes with the maximal score ";
+	for(int n=0;n<N;n++) // for each time step
+	{
+		max_val=P[n][0];
+		max = 0;
+		for(int c=1;c<C;c++)
+		{
+			// let's check Q now
+			if(P[n][c] > max_val)
+			{
+				max_val = P[n][c];
+				max = c;
+			}
+		}
+		// print the most probable class
+		std::cout<<max<<" ";
+	}
+	std::cout<<"\n";
 }
