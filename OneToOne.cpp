@@ -1,7 +1,7 @@
 #include <iostream>
 #include "lm/model.hh"  /* Language Model */
 #include <fstream>
-#include <cmath>
+#include <math.h>
 #include <stdlib.h>     /* srand, rand */
 #include <time.h>       /* time */
 #include <limits> 	/* numeric limits */
@@ -11,10 +11,12 @@ using namespace lm::ngram;
 Model model("10gram.wb.lm"); // read a 10-gram model
 
 
-#define N 22  // Amount of training observations
+#define N 393  // Amount of training observations
 #define D 2  // Dimensionality of a single vector 
 #define C 83  // Amount of classes ( letters in current case)
 #define M 2   // We will use m-gram language model
+
+#define epsilon pow(10,-10) //accuracy of calculations
 
 // i/o functions
 void reading_file(double array[N][D],char* name);
@@ -58,10 +60,11 @@ int main()
 	for(int n=0;n<N;n++)
 	{
 		for(int d=0;d<D;d++)
-		{		
-			if(n%3 ==0) x[n][d] = 50;
-			else if(n%3 ==1) x[n][d] = 46;
-			else x[n][d] = 55;
+		{
+			x[n][d] = n%83;		
+			//if(n%3 ==0) x[n][d] = 50;
+			//else if(n%3 ==1) x[n][d] = 46;
+			//else x[n][d] = 55;
 		}
 	}
 	x[5][0] = 35; x[5][1] = 35; // just to make training data more interesting
@@ -75,15 +78,13 @@ int main()
 	// initialise parameters ( means and variances) and table Q
 	init_params();
 
-	// run forward part of the algorithm
-	Baum_algorithm(x);
 
 	// Do Expectation - Maximization
-	//EM(x, 2);
+	EM(x, 5);
 
 	// test
-	std::cout<<"The probablity of the word :"<< word_total_probability(x)<<"\n";
-	test_prob_norm();
+	//test_prob_norm();
+	//debug();
 
 	//primitive_decode();
 	return 0;
@@ -115,7 +116,7 @@ void init_params()
 		Variances[d] = 1;
 	for(int c=0;c<C;c++)
 		for(int d=0;d<D;d++)
-			Means[c][d] = c;//0.1;
+			Means[c][d] = c+0.5;
 }
 
 // Transition probability for HMM ( ln of it)
@@ -182,7 +183,6 @@ void init_Q(double x[N][D])
 	for(int cl=0;cl<C;cl++) // go over all classe
 	{
 		Q[0][cl]  = emiss_prob(x[0],cl) + unigram_score(cl);
-		//std::cout<<"Q[0]["<<cl<<"] = "<<Q[0][cl]<<"\n";
 	}
 
 	// All other values are initialized to -1 in order to see that it is not assigned the value yet
@@ -208,13 +208,10 @@ void forward(int n, int curr_char, double word[N][D])
 	// sum over all other characters
 	for(int prev_char=1;prev_char<C;prev_char++)
 	{
-		//std::cout<<"Value for "<<prev_char<<" is "<<Q[n-1][prev_char]<<"\n";
 		if(Q[n-1][prev_char] == -1)
 			std::cerr<<" Error! At time step "<<n-1<<" for class "<<prev_char<<" Q was not initialized, but forward algorithm tried to use it\n";
 		// We need to do summation in a logarithm space
 		sum = add_log_scores(sum, Q[n-1][prev_char] + trans_prob(prev_char, curr_char));  
-		//if(n==N-1 && curr_char ==50) 
-		//	std::cout<<"Sum is "<<sum<<"\n"; 
 	}
 	Q[n][curr_char] = emiss_prob(word[n],curr_char) + sum;
 }
@@ -271,19 +268,25 @@ void Baum_algorithm(double data[N][D])
 	for(int n=1;n<N;n++) // go over all timespeps
 		for(int c=0;c<C;c++) // go over all characters
 			forward(n,c,data);
-	//std::cout<<"I finished forward path\n";
 	// Do backward path
 	init_Q_tilda(data);
 	for(int n=N-2;n>=0;n--) // go over all timespeps
 		for(int c=0;c<C;c++) // go over all characters
 			backward(n,c,data);
-	//std::cout<<" Backward!\n";
 
-	// Calculate the NOT-NORMALIZED log - probabilities
+	// Calculate not normalized log - probabilities
 	for(int n=0;n<N;n++) // go over all timespeps
 		for(int c=0;c<C;c++) // go over all characters
-			P[n][c] = Q[n][c] + Q_tilda[n][c];
+			P[n][c] = (Q[n][c] + Q_tilda[n][c]);
 
+	// Get a log of the total probabolity of a sequence for normalization
+	double log_norm = word_total_probability(data);
+
+	std::cout<<"Normalization factor: "<<log_norm<<"\n";
+	// Normalize the probabilities
+	for(int n=0;n<N;n++) // go over all timespeps
+		for(int c=0;c<C;c++) // go over all characters
+			P[n][c] = P[n][c] -  log_norm;
 }
 
 /* 						Learning 						*/
@@ -291,7 +294,7 @@ void Baum_algorithm(double data[N][D])
 // Expectation Maximization algorithm
 void EM(double data[N][D], int iterNumb)
 {
-	double sum, normalization;
+	double sum, norm;
 	for(int iter = 0; iter<iterNumb; iter++)
 	{
 		// Debug
@@ -300,23 +303,35 @@ void EM(double data[N][D], int iterNumb)
 			std::cout<<Means[c][0]<<" ";
 		std::cout<<"\n";
 
+
 		// first - get probabilities Pt(c / x1_N)
 		Baum_algorithm(data);
+
+		// check normalization
+		test_prob_norm();
 		
 		// then - reestimate means
 		for(int c=0;c<C;c++) // for all classes
 		{
 			// Calculate normalization sum
-			normalization = 0;
+			norm = 0;
 			for(int t=0;t<N;t++) // go over all time-steps
-				normalization = normalization + exp(P[t][c]);
+			{
+				// if(c==35) std::cout<<"norm = "<<norm<<"\n";
+				norm = norm + exp(P[t][c]);
+			}
+			if(norm < epsilon * epsilon) 
+			{
+				//std::cout<<"Kept the mean for class "<<c<<" because of the norm = "<<norm<<"\n";
+				continue; //to avoid devition on zero
+			}
 			// Calculate the sum for the new mean
 			for(int d=0;d<D;d++) // for all dimensions
 			{
 				sum = 0;
 				for(int t=0;t<N;t++) // go over all time-steps
 					sum = sum + exp(P[t][c]) * data[t][d];
-				Means[c][d] = sum / normalization;
+				Means[c][d] = sum / norm;
 			}
 		}
 
@@ -324,24 +339,28 @@ void EM(double data[N][D], int iterNumb)
 		for(int d=0;d<D;d++)
 		{
 			sum = 0;
-			for(int c=0;c<N;c++) // for all classes
+			for(int c=0;c<C;c++) // for all classes
 				for(int t=0;t<N;t++) // go over all time-steps
 					sum = sum + exp(P[t][c]) * (data[t][d] - Means[c][d])*(data[t][d] - Means[c][d]);
 			
 			Variances[d] = sum / N;
 		}	
+		
+		debug();
 	}
 }
 			
 	
-// Probability of a given word
+// Log - probability of a given word
 double word_total_probability(double word[N][D])
 {
-	double sum=0;
+	double sum=P[N-1][0]; // initialize the sum
 	for(int c=0;c<C;c++)
-		sum = sum + exp(P[N-1][c]);
+		sum = add_log_scores(sum,P[N-1][c]); // sum in a log space
 	return sum;
 }
+
+	
 
 
 /* 					Testing and Debuging						*/
@@ -356,14 +375,25 @@ void test_prob_norm()
 		sum = 0;
 		for(int c=0;c<C;c++)
 			sum = sum + exp(P[n][c]);
-		std::cout<<sum<<"\n";
+		if(fabs(sum - 1) > 0.0001)
+		{
+			std::cout<<"The probability of characters is not normalized at time-step "<<n<<". It sums up to "<<sum<<"\n";
+			return;
+		}
+		//std::cout<<sum<<"\n";
 	}
+	std::cout<<"Normalization test was passed!\n";
 }
 		
 
 // Was used to debug a Forward - Backward algorithm
 void debug()
 {
+		//DEBUG
+	std::cout<<"Sigma : "<<Variances[0]<<" "<<Variances[1]<<"\n";
+	//for(int c=0;c<C;c++)
+	//	std::cout<<"P[N-1]["<<c<<"] = "<<P[N-1][c]<<"\n";
+	
 	// DEBUG table Q
 	// Find the highest prob at the last time-step
 	double max_val=Q[N-1][0];
@@ -377,9 +407,9 @@ void debug()
 			max = c;
 		}
 		// print probabilities
-		//std::cout<<"Prob of class "<<c<<" at the last time step is "<<Q[N-1][c]<<"\n";
+		//std::cout<<"Q of class "<<c<<" at the last time step is "<<Q[N-1][c]<<"\n";
 	}
-	std::cout<<"Q gives the most probable class for the last timestep : "<<max<<" with the probability "<<max_val<<".\n";
+	//std::cout<<"Q gives the most probable class for the last timestep : "<<max<<" with the probability "<<max_val<<".\n";
 
 	// DEBUG table Q_tilda
 	// Find the highest prob at the first time-step
@@ -395,9 +425,9 @@ void debug()
 			max = c;
 		}
 		// print probabilities
-		// std::cout<<c<<" Q_tilda value for time step = "<<time_step<<" is "<<Q_tilda[time_step][c]<<"\n";
+		//std::cout<<c<<" Q_tilda value for time step = "<<time_step<<" is "<<Q_tilda[time_step][c]<<"\n";
 	}
-	std::cout<<"Q_tilda gives the most probable class for the time step "<<time_step<<" : "<<max<<" with the probability "<<max_val<<".\n";
+	//std::cout<<"Q_tilda gives the most probable class for the time step "<<time_step<<" : "<<max<<" with the probability "<<max_val<<".\n";
 }
 
 void primitive_decode()
