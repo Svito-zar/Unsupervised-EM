@@ -19,12 +19,13 @@ Model model("10gram.wb.lm"); // read a 10-gram model
 #define D 256  // Dimensionality of a single vector 
 #define C 10  // Amount of classes ( numbers in current case)
 #define M 1   // We will use m-gram language model
+#define Range 1000 // Range of values
 
 #define epsilon 1e-10 //accuracy of calculations
 
 // i/o functions
-void reading_file(double array[N][D],char* name);
-void read_usps(double x[N][D], char* filename);
+void read_labels(int array[N],char* name);
+int read_usps(double x[N][D], char* filename);
 
 // functions for HMM
 void init_params();
@@ -34,7 +35,7 @@ double USPS_unigram_score(int symbol);
 double add_log_scores(double a, double b);
 
 // DP backward-forward algorithm functions
-void init_Q(double word[N][D]);
+int init_Q(double word[N][D]);
 void init_Q_tilda(double word[N][D]);
 int forward(int n, int curr_char, double data[N][D]);
 int backward(int n, int c, double word[N][D]);
@@ -42,12 +43,16 @@ int Baum_algorithm(double data[N][D]);
 
 // Learning functions
 void EM(double data[N][D], int iterNumb);
-double word_total_probability(double word[N][D]);
+double word_total_probability();
 
 // Testing functions
 int test_prob_norm();
 void primitive_decode();
-void debug();
+void debug(double x[N][D]);
+double dist(int cl1, int cl2);
+
+// Evaluation
+double evaluate(int labels[N]);
 
 // Global Variables
 double Means[C][D]; 	// means of the classes
@@ -59,31 +64,40 @@ double P[N][C]; 	// prob(c/data) for the time step n
 
 int main()
 {
+	int err_flag;
+
 	// read example observations 
 	double x[N][D];
-	read_usps(x,"usps.my");
+	err_flag = read_usps(x,"test.txt");
 
-	// initialise parameters ( means and variances) and table Q
+	// check if the reading was succesfull
+	if(err_flag)
+		return -1;
+
+	// initialise parameters ( means and variances)
 	init_params();
 
 
 	//Baum_algorithm(x); 
 	
+	//TRAIN
 	// Do Expectation - Maximization
-	EM(x, 3);
+	EM(x, 15);
 
-	// test
-	//test_prob_norm();
-	//debug();
+	//TEST
+	std::cout<<"I am evaluating...";
+	int labels[N];
+	read_labels(labels,"labels.txt");
 
+	double err_rate =  evaluate(labels);
+	std::cout<<"Error rate : "<<err_rate<<"\n";
 	//primitive_decode();
 	return 0;
 }
 
 // read a USPS data 
-void read_usps(double x[N][D], char* filename)
+int read_usps(double x[N][D], char* filename)
 {
-	std::cout<<"Reading USPS data from the file "<<filename<<" ...\n";
 	std::string line; //for reading a line
 	std::ifstream myfile (filename);
 	boost::char_separator<char> sep("[] ");
@@ -91,14 +105,15 @@ void read_usps(double x[N][D], char* filename)
 	int d=0;//iterator for dimensions
    	if (myfile.is_open())
    	{
+		std::cout<<"Reading USPS data from the file "<<filename<<" ...\n";
       		while ( myfile.good() )
        		{
            		std::getline (myfile,line);
 	   		boost::tokenizer< boost::char_separator<char> > tokens(line, sep);
     	   		BOOST_FOREACH (const std::string& t, tokens) 
 			{
-				std::string::size_type sz;     // alias of size_t
-				x[n][d] = stod (t,&sz) / 1000; // get next value and normalize it
+				std::string::size_type sz;      // alias of size_t
+				x[n][d] = stod (t,&sz) ;  	// get next value
 				d++;
 				if(d==D) // we are done with current sample
 				{
@@ -108,12 +123,13 @@ void read_usps(double x[N][D], char* filename)
 			}
       		}
        		myfile.close();
+		return 0;
    	}
-
    	else std::cout << "Unable to open the file with USPS data\n"; 
+	return 1; // if we are here - we could not open the file
 }
 
-void reading_file(double array[N][D],char* name)
+void read_labels(int array[N],char* name)
 {
         std::ifstream in(name); // open the file for reading
         if(!in)
@@ -124,11 +140,7 @@ void reading_file(double array[N][D],char* name)
 	// read all data samples
         for(int ind=0; ind<N;ind++)
         {
-		// read all dimensions of the data
-		for(int d=0;d<D;d++)
-		{
-			in>>array[ind][d]; 
-        	}
+		in>>array[ind]; 
 	}
 }
 
@@ -138,9 +150,9 @@ void init_params()
 	/* initialize random seed: */
   	srand (time(NULL));
 	std::default_random_engine generator;
-  	std::uniform_real_distribution<double> distribution(0.0,1.0);
+  	std::uniform_real_distribution<double> distribution(0.0,1000);
 	for(int d=0;d<D;d++)
-		Variances[d] = 0.05;
+		Variances[d] = 80;
 	for(int c=0;c<C;c++)
 		for(int d=0;d<D;d++)
 			Means[c][d] = distribution(generator); // generate random number
@@ -156,7 +168,7 @@ double emiss_prob(double x[D], int cl)
 	for(int d =0; d<D;d++)
 	{
 		// Ignore not relevant features
-		if(Variances[d] == 0)
+		if(fabs(Variances[d]) < epsilon)
 			continue;
 		sum_for_exp += (x[d] - Means[cl][d]) * (x[d] - Means[cl][d]) / (Variances[d]*Variances[d]);
 		norm_fact+=  log(sqrt(2*M_PI) * Variances[d]);
@@ -171,31 +183,35 @@ double emiss_prob(double x[D], int cl)
 			std::cerr<<"Class : "<<cl<<" " <<" after dimension "<<d<<" :Normalization factor of Gaussian emmision prob. is -inf ! Variances[d] = "<<Variances[d]<<" \n";
 	}
 	// check numerical problems 
-	if(std::isinf(-0.5*sum_for_exp - log(norm_fact))) 
+	if(std::isinf(-0.5*sum_for_exp - norm_fact)) 
 		std::cerr<<"Class : "<<cl<<" has Gaussian emmision prob. = inf !  Sum for exponen = "<<sum_for_exp<<" normalization factor = "<<norm_fact<<"\n";
+	if((-0.5*sum_for_exp - norm_fact) > 0) 
+		std::cerr<<"Class : "<<cl<<" has Gaussian emmision prob. >0 !  Sum for exponen = "<<sum_for_exp<<" normalization factor = "<<norm_fact<<"\n";
 	
-	return -0.5*sum_for_exp - norm_fact;
+	return -0.5*sum_for_exp- norm_fact;
 }
 
 // Transition probability for USPS distribution - simply unigram probabilities
-// Current distribution : p(1) = 0.8, p(10) = 0.1, p(3) = p(7) = 0.05
+// Current distribution : p(0) = 0.4, p(1) = 0.3, p(2) = 0.2, p(3) = 0.1
 double USPS_trans_prob(int prev, int next)
 {
 	USPS_unigram_score(next);
 }
 
 // Unigram probability for USPS distribution.
-// Current distribution : p(1) = 0.8, p(10) = 0.1, p(3) = p(7) = 0.05
+// Current distribution : p(0) = 0.4, p(1) = 0.3, p(2) = 0.2, p(3) = 0.1
 double USPS_unigram_score(int number)
 {
-  	if(number == 1)
-		return log(0.8);
-	else if(number == 0) // stays for 10
-		return log(0.1);
-	else if( number == 3 || number == 7)
-		return log(0.05);
-	else
-		return -200; // instead of -inf ( not to create numerical problems )
+  	if(number == 0)
+		return log(0.4);
+	else if(number == 1) 
+		return log(0.3);
+	else if( number == 2)
+		return log(0.2);
+	     else if(number ==3)
+			return log(0.1);
+		  else
+			return -5000; // instead of -inf ( not to create numerical problems )
 }
 
 // Adding two scores in a log-space (when a and b - log probabilities)
@@ -218,7 +234,7 @@ double add_log_scores(double a, double b) {
 /* 					BACKWARD - FORWARD ALGORITHM			*/
 
 // Initialization of a table Q
-void init_Q(double x[N][D])
+int init_Q(double x[N][D])
 {
 /* input : training sequence */
 	
@@ -226,6 +242,13 @@ void init_Q(double x[N][D])
 	for(int cl=0;cl<C;cl++) // go over all classe
 	{
 		Q[0][cl]  = emiss_prob(x[0],cl) + USPS_unigram_score(cl);
+		// check if the value make sence
+		if(Q[0][cl] > 0)
+		{
+			std::cout<<"Error during initialization of a Q table : positive log-probability for class "<<cl<<"\n";
+			std::cout<<"Emmision prob was "<<emiss_prob(x[0],cl)<<" transition was "<<USPS_unigram_score(cl)<<"\n";
+			return 0;
+		}
 		//std::cout<<"During initialization emission prob. of class "<<cl<<" was : "<< emiss_prob(x[0],cl)<<"\n";
 	}
 
@@ -233,7 +256,10 @@ void init_Q(double x[N][D])
 	for(int n=1;n<N;n++)
 		for(int cl=0;cl<C;cl++) // go over all characters
 			Q[n][cl]  = -1;
+			
+	//std::cout<<"For x[0] at t=0 : Emmision prob of class 3"<<emiss_prob(x[0],3)<<" transition was "<<USPS_unigram_score(3)<<"\n";
 	
+	return 1;
 }
 
 // Forward algorithm
@@ -266,6 +292,16 @@ int forward(int n, int curr_char, double data[N][D])
 		}
 	}
 	Q[n][curr_char] = emiss_prob(data[n],curr_char) + sum;
+
+	// check if the value make sence
+	if(Q[n][curr_char] > 0)
+	{
+		std::cout<<"Error during forward path : positive log-probability at time step "<<n<<" for class "<<curr_char<<"\n";
+		std::cout<<"Sum was "<<sum<<"\n";
+		return 0;
+	}
+	
+	// if we are here - we had no errors
 	return 1;
 }
 
@@ -329,8 +365,15 @@ int backward(int n, int curr_char, double data[N][D])
 int Baum_algorithm(double data[N][D])
 {
 	int err_flag;
+
+	// Initialise Q table
+	err_flag = init_Q(data);
+
+	// check numerical issues
+	if(err_flag == 0)  
+		return 0;
+
 	// Do forward path
-	init_Q(data);
 	for(int n=1;n<N;n++){ // go over all timespeps
 		for(int c=0;c<C;c++){ // go over all characters
 			err_flag = forward(n,c,data);
@@ -338,6 +381,7 @@ int Baum_algorithm(double data[N][D])
 				return 0;
 		}
 	}
+
 	// Do backward path
 	init_Q_tilda(data);
 	for(int n=N-2;n>=0;n--){ // go over all timespeps
@@ -353,7 +397,7 @@ int Baum_algorithm(double data[N][D])
 			P[n][c] = (Q[n][c] + Q_tilda[n][c]);
 
 	// Get a log of the total probabolity of a sequence for normalization
-	double log_norm = word_total_probability(data);
+	double log_norm = word_total_probability();
 
 	std::cout<<"Normalization factor: "<<log_norm<<"\n";
 	// Normalize the probabilities
@@ -368,29 +412,42 @@ int Baum_algorithm(double data[N][D])
 // Expectation Maximization algorithm
 void EM(double data[N][D], int iterNumb)
 {
+	std::cout<<"I do EM ...\n";
 	double sum, norm;
 	int err_flag;
 	for(int iter = 0; iter<iterNumb; iter++)
 	{
+		std::cout<<iter<<" iteration.\n";
 		// Debug
-		std::cout<<"Rounded Means of class 0 : \n";
+		/*
+		std::cout<<"Rounded Means of class 2 : \n";
 		for(int d2=0;d2<16;d2++) // second dimension of the image
 		{
 			for(int d1=0;d1<16;d1++)
 			{
-				if(Means[0][d1+d2*16] > 0.5)
+				if(Means[2][d1+d2*16] > 500)
 					std::cout<<1<<" ";
 				else std::cout<<0<<" ";
-				//std::cout<<Means[0][d1+d2*16]<<" ";
+				//std::cout<<Means[3][d1+d2*16]<<" ";
+			}
+			std::cout<<"\n";
+		}*/
+		
+		std::cout<<"Rounded Means of class 3 : \n";
+		for(int d2=0;d2<16;d2++) // second dimension of the image
+		{
+			for(int d1=0;d1<16;d1++)
+			{
+				if(Means[3][d1+d2*16] > 500)
+					std::cout<<1<<" ";
+				else std::cout<<0<<" ";
+				//std::cout<<Means[3][d1+d2*16]<<" ";
 			}
 			std::cout<<"\n";
 		}
 
-
 		// first - get probabilities Pt(c / x1_N)
 		err_flag = Baum_algorithm(data);
-
-		debug();
 
 		// check if we had numerical problems
 		if(err_flag == 0)
@@ -398,6 +455,8 @@ void EM(double data[N][D], int iterNumb)
 			std::cout<<" Have got numerical problems during "<<iter+1<<" iteration of EM algorithm!\n";
 			return;
 		}
+
+		//debug(data);
 
 		// check normalization
 		err_flag = test_prob_norm();
@@ -415,14 +474,18 @@ void EM(double data[N][D], int iterNumb)
 			norm = 0;
 			for(int t=0;t<N;t++) // go over all time-steps
 			{
-				// if(c==35) std::cout<<"norm = "<<norm<<"\n";
+				/*if(c==2)
+					if(t<10)
+						if(exp(P[t][c]) > 1) 
+							 std::cout<<"Prob["<<t<<"][2] = "<<exp(P[t][c])<<"\n";*/
 				norm = norm + exp(P[t][c]);
 			}
-			if(norm < epsilon * epsilon) 
+			if(norm < epsilon) 
 			{
-				std::cout<<"Kept the mean for class "<<c<<" because of the probability sum = "<<norm<<"\n";
+				//std::cout<<"Kept the mean for class "<<c<<" because of the probability sum = "<<norm<<"\n";
 				continue; //to avoid devition on zero
 			}
+			//std::cout<<"In EM norm for class "<<c<<" = "<<norm<<"\n";
 			// Calculate the sum for the new mean
 			for(int d=0;d<D;d++) // for all dimensions
 			{
@@ -433,24 +496,53 @@ void EM(double data[N][D], int iterNumb)
 			}
 		}
 
-		// finally reestimate gaussians
+		// Reestimate gaussians
+		
 		for(int d=0;d<D;d++)
 		{
 			sum = 0;
 			for(int c=0;c<C;c++) // for all classes
 				for(int t=0;t<N;t++) // go over all time-steps
 					sum = sum + exp(P[t][c]) * (data[t][d] - Means[c][d])*(data[t][d] - Means[c][d]);
-			Variances[d] = sum / N;
+			Variances[d] = sqrt(sum/N);
+			// Regularization
+			if(Variances[d] < 40)
+				Variances[d] = 40;
 		}	
+
+		// Check if a few classes are two close to each other
+		if(iter%4 != 3)
+			continue; // do checking once in 4 time steps
+		double diff; // difference between means
+		for(int cl1=0;cl1<C;cl1++)
+		{
+			for(int cl2=cl1+1;cl2<C;cl2++)
+			{
+				diff = dist(cl1,cl2);
+				if(diff < 0.015) // if they are too close
+				{
+					std::cout<<"Classes "<<cl1<<" and "<<cl2<<" collapsed!\n";
+					// Reset one of them to random values
+	  				srand (time(NULL));
+					std::default_random_engine generator;
+  					std::uniform_real_distribution<double> distribution(0.0,1000);
+					for(int d=0;d<D;d++)
+						Means[cl2][d] = distribution(generator); // generate random number
+					// Reset variances
+					for(int d=0;d<D;d++)
+						Variances[d] = 120;
+				}
+			}
+		}
 	}
 }
 			
 	
 // Log - probability of a given word
-double word_total_probability(double word[N][D])
+double word_total_probability()
 {
 	double sum=P[N-1][0]; // initialize the sum
-	for(int c=0;c<C;c++)
+	for(int c=1;c<C;c++)
 		sum = add_log_scores(sum,P[N-1][c]); // sum in a log space
 	return sum;
 }
@@ -463,16 +555,17 @@ double word_total_probability(double word[N][D])
 // Test if our probability distrubution for classes is normalized
 int test_prob_norm()
 {
-	double sum;
-	std::cout<<"I am testing the normalization of the probability distribution ...\n";
-	for(int n=0;n<N;n++)
+	double sum, prob;
+	//std::cout<<"I am testing the normalization of the probability distribution ...\n";
+	for(int n=N-1;n<N;n++)
 	{
-		sum = 0;
-		for(int c=0;c<C;c++)
-			sum = sum + exp(P[n][c]);
-		if(fabs(sum - 1) > 0.1)
+		sum =P[n][0]; // initialize the sum
+		for(int c=1;c<C;c++)
+			sum = add_log_scores(sum,P[n][c]); // sum in a log space
+		prob = exp(sum); //convert back to the probability
+		if(fabs(prob - 1) > 0.001)
 		{
-			std::cout<<"The probability of characters is not normalized at time-step "<<n<<". It sums up to "<<sum<<"\n";
+			std::cout<<"The probability of characters is not normalized at time-step "<<n<<". It sums up to "<<prob<<"\n";
 			return 0;
 		}
 		//std::cout<<sum<<"\n";
@@ -483,16 +576,65 @@ int test_prob_norm()
 		
 
 // Was used to debug a Forward - Backward algorithm
-void debug()
+void debug(double x[N][D])
 {
-		//DEBUG
+	std::cout<<"Rounded Means of class 1 : \n";
+	for(int d2=0;d2<16;d2++) // second dimension of the image
+	{
+		for(int d1=0;d1<16;d1++)
+		{
+			if(Means[1][d1+d2*16] > 500)
+				std::cout<<1<<" ";
+			else std::cout<<0<<" ";
+			//std::cout<<Means[3][d1+d2*16]<<" ";
+		}
+		std::cout<<"\n";
+	}
+	std::cout<<"Rounded Means of class 0 : \n";
+	for(int d2=0;d2<16;d2++) // second dimension of the image
+	{
+		for(int d1=0;d1<16;d1++)
+		{
+			if(Means[0][d1+d2*16] > 500)
+				std::cout<<1<<" ";
+			else std::cout<<0<<" ";
+			//std::cout<<Means[3][d1+d2*16]<<" ";
+		}
+		std::cout<<"\n";
+	}
+
+	std::cout<<"Rounded Observation x[2] : \n";
+	for(int d2=0;d2<16;d2++) // second dimension of the image
+	{
+		for(int d1=0;d1<16;d1++)
+		{
+			if(x[2][d1+d2*16] > 500)
+				std::cout<<1<<" ";
+			else std::cout<<0<<" ";
+			//std::cout<<Means[3][d1+d2*16]<<" ";
+		}
+		std::cout<<"\n";
+	}
+	std::cout<<"Emiss prob for time step 2:\n";
+	for(int cl=0;cl<C;cl++)
+		std::cout<<"Class "<<cl<<" = "<<emiss_prob(x[2], cl)<<"\n";
+		
+	//DEBUG
 	std::cout<<"Sigma : ";
 	for(int d=0;d<20;d++)
 		std::cout<<Variances[d]<<" ";
 	std::cout<<"\n";
-	//for(int c=0;c<C;c++)
-	//	std::cout<<"P[N-1]["<<c<<"] = "<<P[N-1][c]<<"\n";
-	
+	/*
+	std::cout<<"\nTime step : 0 \n";
+	int n=0;
+	for(int c=0;c<C;c++)
+		std::cout<<"Q["<<n<<"]["<<c<<"] = "<<Q[n][c]<<"\n";
+	for(int c=0;c<C;c++)
+		std::cout<<"Q_tilda["<<n<<"]["<<c<<"] = "<<Q_tilda[n][c]<<"\n";
+	for(int c=0;c<C;c++)
+		std::cout<<"P["<<n<<"]["<<c<<"] = "<<P[n][c]<<"\n";
+	*/
+
 	// DEBUG table Q
 	// Find the highest prob at the first time-step
 	double max_val=Q[0][0];
@@ -540,7 +682,6 @@ void primitive_decode()
 		max = 0;
 		for(int c=1;c<C;c++)
 		{
-			// let's check Q now
 			if(P[n][c] > max_val)
 			{
 				max_val = P[n][c];
@@ -551,4 +692,55 @@ void primitive_decode()
 		std::cout<<max<<" ";
 	}
 	std::cout<<"\n";
+}
+
+// will return error rate in percents
+double evaluate(int labels[N])
+{
+	double err_rate=0;
+	double max_val; 
+	int max;
+	int confusion[C][C];
+	// initialize confusion matrix
+	for(int c1=0;c1<C;c1++)
+		for(int c2=0;c2<C;c2++)
+			confusion[c1][c2] = 0;
+	// calculate error rate	
+	for(int n=0;n<N;n++) // for each time step
+	{
+		max_val=P[n][0];
+		max = 0;
+		for(int c=1;c<C;c++)
+		{
+			if(P[n][c] > max_val)
+			{
+				max_val = P[n][c];
+				max = c;
+			}
+		}
+		if(max != labels[n])
+			err_rate++;
+		confusion[labels[n]][max] ++; 
+	}
+	// print confusion matrix
+	std::cout<<"Confusion matrix : \n";
+	for(int c1=0;c1<C;c1++)
+	{
+		for(int c2=0;c2<C;c2++)
+			std::cout<<confusion[c1][c2]<<" ";
+		std::cout<<"\n";
+	}
+	return err_rate * 100.0 / N;
+}
+
+// Will calculate the L2-distance between means, normalised w.r.t. the range of values
+double dist(int cl1, int cl2)
+{
+	double sum=0;
+	for(int d=0;d<D;d++)
+	{
+		sum+=(Means[cl1][d] - Means[cl2][d])*(Means[cl1][d] - Means[cl2][d]);
+	}
+	sum = sqrt(sum) / (D * Range);
+	return sum;
 }

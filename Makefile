@@ -5,7 +5,7 @@ LINK=lkenlm
 
 MYLIBRARIES=/work/smt2/nuhn/tools/build/kenlm-2015-07-28/lib
 CC=g++
-CFLAGS=-std=c++11 
+CFLAGS=-std=c++0x
 
 #------------------------------------------------------------------------------
 
