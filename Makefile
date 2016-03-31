@@ -1,24 +1,49 @@
-SOURCE=OneToOne.cpp
-MYPROGRAM=EM
-MYINCLUDES=/work/smt2/nuhn/tools/build/kenlm-2015-07-28/include 
-LINK=lkenlm 
+OBJS	=	events.o	\
+		random.o
 
-MYLIBRARIES=/work/smt2/nuhn/tools/build/kenlm-2015-07-28/lib
+LIBS	=	-lgsl -lgslcblas -lm 
+
 CC=g++
 CFLAGS=-std=c++0x
+
+default	:	${OBJS}	EM.o
+	$(CC) $(CFLAGS) -o  EM ${OBJS} EM.o $(LIBS)
+
+.SUFFIXES	:	.o .cc
+
+.cc.o	:
+	$(CC) $(CFLAGS) -c $<
+
+clean	:
+	rm *.o EM
+
+# DO NOT DELETE
+
+EM.o: events.hh
+EM.o: events.hh
+events.o: events.hh random.hh
+random.o: random.hh 
+
+
+
+
+
+#$(CC) $(CFLAGS)
+
+#SOURCE=OneToOne.cc
+
+
+
 
 #------------------------------------------------------------------------------
 
 
 
-all: $(MYPROGRAM)
+#all: $(MYPROGRAM)
 
 
 
-$(MYPROGRAM): $(SOURCE)
+#$(MYPROGRAM): $(SOURCE)
 
-	$(CC) $(CFLAGS) -I$(MYINCLUDES)-$(LINK) $(SOURCE) -o $(MYPROGRAM) -L$(MYLIBRARIES)
+#	$(CC) $(CFLAGS) $(SOURCE) -o $(MYPROGRAM) $(LIBS)
 
-clean:
-
-	rm -f $(MYPROGRAM)
