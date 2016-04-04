@@ -4,7 +4,7 @@ OBJS	=	events.o	\
 LIBS	=	-lgsl -lgslcblas -lm 
 
 CC=g++
-CFLAGS=-std=c++0x
+CFLAGS=-std=c++0x -O0 -g
 
 default	:	${OBJS}	EM.o
 	$(CC) $(CFLAGS) -o  EM ${OBJS} EM.o $(LIBS)

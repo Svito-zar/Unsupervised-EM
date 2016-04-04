@@ -1,4 +1,5 @@
 #include <iostream>
+#include <iomanip>
 //#include "lm/model.hh" 
 #include "events.hh"     /* Language Model */
 #include <sstream>
@@ -16,50 +17,53 @@
 
 //Model model("10gram.wb.lm"); // read a 10-gram LM model
 
-#define T 300      // Amount of training observations - 10^4 - 10^5
+#define S 30  	   // Amount of sentences
+#define T 200      // Amount of training observations - 10^4 - 10^5
 #define D 784      // Dimensionality of a single vector 
 #define C 10       // Amount of classes ( numbers in current case)
 #define M 2   	   // We will use m-gram language model
 #define Range 256  // Range of values
-#define L 1        // Maximal amount of mixure densities
-#define ITER 10	   // Amount of EM iteration
+#define L 4        // Maximal amount of mixure densities
+#define ITER 6	   // Amount of EM iteration
 
-#define PictureAmount 100
+#define PictureAmount 2000
 
 #define epsilon 1e-9 //accuracy of calculations
 
 // i/o functions
-bool read_mnist(double MNIST[10][PictureAmount][D], std::string folder);
+bool read_mnist(std::vector<std::vector<std::vector<double> > >  MNIST, std::string folder);
 
 // Initializations
 void init_params();
-double generate_LM_and_sequence(unsigned seed);
-void sample_MNIST(double MNIST[10][PictureAmount][D], double x[T][D]);
+double generate_LM(unsigned seed);
+double sample_sequence(unsigned seed, int index);
+void sample_MNIST(std::vector<std::vector<std::vector<double> > >  MNIST, int sentence_ind, std::vector<std::vector<double> > & x);
 
 // functions for HMM
 double MNIST_trans_prob(int prev, int next);
-double mix_emiss_prob(double x[D], int cl,int m);
-double emiss_prob(double x[D], int cl);
+double mix_emiss_prob(std::vector<double> x, int cl,int m);
+double emiss_prob(std::vector<double> x, int cl);
 double MNIST_unigram_score(int symbol);
 double add_log_scores(double a, double b);
-double emiss_prob(double x[D], int cl);
-double mix_proportion(double x[D], int cl, int l);
+double emiss_prob(std::vector<double> x, int cl);
+double mix_proportion(std::vector<double> x, int cl, int l);
 
 // DP backward-forward algorithm functions
-int init_Q(double word[T][D]);
-void init_Q_tilda(double word[T][D]);
-int forward(int n, int curr_char, double data[T][D]);
-int backward(int n, int c, double word[T][D]);
-int Baum_algorithm(double data[T][D]); 
+int init_Q(std::vector<std::vector<double> >  x);
+void init_Q_tilda(std::vector<std::vector<double> >  x);
+int forward(int n, int curr_char, std::vector<std::vector<double> >  x);
+int backward(int n, int c, std::vector<std::vector<double> >  x);
+int Baum_algorithm(std::vector<std::vector<double> >  x); 
+double word_total_probability();
 
 // Learning functions
-void EM(double data[T][D], int iterTumb);
-double word_total_probability();
+void EM();
+void addToSum(std::vector<std::vector<double> >  x, std::vector<std::vector<std::vector<double> > > & sum_means, std::vector<std::vector<double> >  & sum_gama_cl, std::vector<double> & sum_gama_c, std::vector<double>  sum_variances);
 
 // Testing functions
 int test_prob_norm();
 void primitive_decode();
-void debug(double x[T][D]);
+void debug(std::vector<std::vector<double> >  x);
 double dist(int cl1, int cl2);
 void show_means(int c);
 bool check_mix_norm(int c);
@@ -68,30 +72,82 @@ bool check_mix_norm(int c);
 double evaluate();
 
 // Global Variables 
-Events::EventBigram bigram;  // Bigram LM
+Events::EventBigram bigram;   // Bigram LM
 //Events::JointEventSet jes;
-std::vector<int> sequence;
-double PP=0;	 	   	     // Perplexity of the LM
-int MixNumb;	             // current amount of mixtures we have
+std::vector<int> sequence[S]; // array of sequences for all sentences
+double PP;	 	      // Perplexity of the LM
+int MixNumb;	              // current amount of mixtures we have
 unsigned int seed;
+bool initial_run;             // will indicate that it is the first run of the EM
 
-double Means[C][L][D]; 	     // means of the classes
-double MixWeights[C][L];     // mixture weights
-double MixSignif[T][C][L];   // mixture significance
-double Variances[D]; 	     // pooled variance
-double Q[T][C]; 	     // backward recursion scores
-double Q_tilda[T][C];        // forward recursion scores
-double P[T][C]; 	     // prob(c/data) for the time step n
+std::vector<std::vector<std::vector<double> > > Means; 	     // means of the classes
+std::vector<std::vector<double> >  MixWeights;               // mixture weights
+std::vector<std::vector<std::vector<double> > > MixSignif;   // mixture significance
+double Variances[D]; 	     				     // pooled variance
+std::vector<std::vector<double> >  Q; 	     		     // backward recursion scores
+std::vector<std::vector<double> >  Q_tilda;        	     // forward recursion scores
+std::vector<std::vector<double> > P; 	     		     // prob(c/data) for the time step n
+int number_ind[C]; 	     				     // indices for different numbers ( used for sampling a sequence)
 
 
 
 int main(int argc, char* argv[]) 
 {
+	if(T < 0){
+    		std::cerr<<" Negative amount of positions ! Stop! \n";
+		return 0;
+  	}
+
+
+	/* 						Allocating of vectors 							*/
+	
+	// Allocate vectors for Means
+  	Means.resize(C);
+  	for (int i = 0; i < C; ++i) {
+   		Means[i].resize(L);
+
+    		for (int j = 0; j < L; ++j)
+      			Means[i][j].resize(D);
+  	}
+	
+	// Allocate vectors for MixWeights
+  	MixWeights.resize(C);
+  	for (int i = 0; i < C; ++i) 
+   		MixWeights[i].resize(L);
+
+	// Allocate vectors for Mixture Significance
+  	MixSignif.resize(T);
+  	for (int i = 0; i < T; ++i) {
+   		MixSignif[i].resize(C);
+
+    		for (int j = 0; j < C; ++j)
+      			MixSignif[i][j].resize(L);
+  	}
+	
+
+	// Allocate vector for the Q table
+	Q.resize(T);
+	for (int i = 0; i < T; ++i) 
+   		Q[i].resize(C);
+
+	// Allocate vector for the Q_tilda table
+	Q_tilda.resize(T);
+	for (int i = 0; i < T; ++i) 
+   		Q_tilda[i].resize(C);
+
+	// Allocate vector for the P table of probabilities
+	P.resize(T);
+	for (int i = 0; i < T; ++i) 
+   		P[i].resize(C);
+
+	
+	
 	// Timing
 	std::clock_t start, end;
   	std::time_t tstart,tend;
 	start = clock();
  	std::time(&tstart);
+
 
 	/* 						Get the parameters from the command line 				*/
 
@@ -109,7 +165,7 @@ int main(int argc, char* argv[])
   	}
 
    	else 
-		std::cout<<"\nInitializing the parameters...\n";
+		std::cout<<"\nThe program started for "<<S<<" sentences of "<<T<<" numbers.\n";
 
 	std::string stringFileName;
   	std::string probDistFileName;
@@ -136,23 +192,21 @@ int main(int argc, char* argv[])
     		}
   	}
 
-	/*						 Initialise parameters ( means, variances and LM)         		*/
+
+	/*						 Initialise parameters ( means, variances, LM and MNIST pictures)         		*/
 	
+	std::cout<<"\nInitializing the parameters...\n";
+
 	// initialize means and covariances for Gaussians	
 	init_params(); 
 
-	// Allocate the training sequence
-  	if(T > 0)
-		sequence.resize(T);
-	else{
-    		std::cerr<<" Negative amount of positions ! Stop! \n";
-		return 0;
-  	}
+	// Generate bigram LM with a given perplexity 
+	double bigram_perplexity, string_perplexity;
+	bigram_perplexity = generate_LM(seed);
+	std::cout<<"Generated LM has perplexity : "<<bigram_perplexity<<"\n";
 
-	// Generate bigram LM with a given perplexity and 
-	// a sequence sampled from it
-	double string_perplexity;
-	string_perplexity = generate_LM_and_sequence(seed);
+	int err_flag;
+
 
 	/* 						 Write LM and sequence into a file 					*/
 	
@@ -176,81 +230,36 @@ int main(int argc, char* argv[])
 	// write the probability distribution into the file
   	bigram.printOn(probDistrFile); 
 
-  	// Write the sequence into a file
-	std::cout<<"Seed : "<<seed<<"\n";
-  	stringFile << "# Seed: " << seed << std::endl;
-  	stringFile << "# perplexity (PP): " << string_perplexity << std::endl;
-  	stringFile << "# number of events: " << C << std::endl;
+	// write all the sequences into the file
+	stringFile << "# number of events: " << C << std::endl;
   	stringFile << "# amount of positions : " << T << std::endl;
-  	stringFile << "# sequence : \n";
-  	for(int i=0; i<T;i++)
-		stringFile << sequence[i]<<" ";
+	std::cout<<"Sampling "<<S<<" strings ...\n";
+  	for(int sentence = 0; sentence < S; sentence++)
+	{
+		//std::cout<<"The sentence : "<<sentence+1<<" :\n";
+			
+		// Sample a sequence from the LM
+		string_perplexity = sample_sequence(seed,sentence);
+		// Write the sequence into a file
+		stringFile << "\n\nString " << sentence << std::endl;
+  		stringFile << "# Seed: " << seed << std::endl;
+  		stringFile << "# perplexity (PP): " << string_perplexity << std::endl;
+  		stringFile << "# sequence : \n";
+  		for(int i=0; i<T;i++)
+			stringFile << sequence[sentence][i]<<" ";
+		seed++;
+	}
 
 	// close file for writting
   	stringFile.close();
   	probDistrFile.close();
 	std::cout<<"Bigram probability distribution was written into file "<<stringFileName<<"\n";
- 	std::cout<<"A sampled sequence of events was written into file "<<probDistFileName<<"\n";
-
-	/* 								Generate training data 				*/
-	
-	int err_flag;
-
-	// read example observations 
-	double MNIST[10][PictureAmount][D];
-	err_flag = read_mnist(MNIST,"MNIST_data");
-
-	// check if the reading was succesfull
-	if(err_flag)
-	{
-		std::cerr<<"Error with reading MNIST dataset!\n";
-		return 1;
-	}
-
-	// Constuct training data
-	double x[T][D];
-	sample_MNIST(MNIST,x);
-
-
-	// debug bigram prob
-	
-	/*for(int i=0;i<10;i++)
-		for(int j=0;j<10;j++)
-			std::cout<<"P("<<i<<" -> "<<j<<") = "<<MNIST_trans_prob(i, j)<<"\n"; */
-
-
-	// debug unigram prob
-	
-	/*for(int i=0;i<10;i++)
-		std::cout<<"P("<<i<<") = "<<MNIST_unigram_score(i)<<"\n"; */
-	
-	// Debug data
-	/*std::cout<<"Rounded Observation x[999] : \n";
-	for(int d2=0;d2<16;d2++) // second dimension of the image
-	{
-		for(int d1=0;d1<16;d1++)
-		{
-			if(x[999][d1+d2*16] > 500)
-				std::cout<<1<<" ";
-			else std::cout<<0<<" ";
-			//std::cout<<Means[3][d1+d2*16]<<" ";
-		}
-		std::cout<<"\n";
-	}*/
+	std::cout<<"All the sequences of events was written into file "<<probDistFileName<<"\n";
 
 
 	/* 									TRAIN							*/
+	EM();
 
-	//Baum_algorithm(x); 
-
-	// Do Expectation - Maximization
-	EM(x, ITER);
-
-	//TEST
-	std::cout<<"I am evaluating...";
-
-	double err_rate =  evaluate();
-	std::cout<<"Error rate : "<<err_rate<<"%\n";
 
 	end = clock();
   	time(&tend);
@@ -264,7 +273,7 @@ int main(int argc, char* argv[])
 
 // It takes the folder with MNIST data as an argument
 // and assumes that it has files data0, data1, data2 ...
-bool read_mnist(double MNIST[10][PictureAmount][D], std::string folder)
+bool read_mnist(std::vector<std::vector<std::vector<double> > >  MNIST, std::string folder)
 {
 	std::cout<<"Reading The MNIST dataset...\n";
 	int n_rows=28;
@@ -283,6 +292,7 @@ bool read_mnist(double MNIST[10][PictureAmount][D], std::string folder)
                 			for(int c=0;c<n_cols;++c)
                 			{
                     				curr_file.read((char*)&temp,sizeof(temp));
+						//std::cout<<"I am here\n";
 		    				MNIST[numb][i][28*r + c] = int(temp);
                 			}
             			}
@@ -292,6 +302,7 @@ bool read_mnist(double MNIST[10][PictureAmount][D], std::string folder)
 			return true;
     		curr_file.close();
 	}
+	
 	return false; // no errors
 }
 
@@ -312,21 +323,20 @@ void init_params()
 			Means[c][0][d] = distribution(generator); 
 	for(int c=0;c<C;c++)
 		MixWeights[c][0] = 1;
+	// Indicate that we are going to do the first run
+	initial_run=true;
 }
 
 // Generate a bigram LM with a given Perplexity (PP) 
-// and sample a sequence using this LM
 // return it's actual perplexity 
-double generate_LM_and_sequence(unsigned seed)
+double generate_LM(unsigned seed)
 {
 	// Initialize bigram LM
-	std::cout<<"Generating LM and sampling a string with a perplexity : "<<PP<<" \n";
+	std::cout<<"Generating bigram LM ... \n";
 	bigram = Events::EventBigram(C);
 	double   bigram_perplexity, string_perplexity;
-	//std::vector<double> conditionalLogPP;
-	// Create a joint event
-	//jes = Events::JointEventSet(C);
-	// Simulate a bigram distribution and a string with a givenPerplexity
+
+	// Simulate a bigram distribution with a givenPerplexity
   	int lm_restart = 0;
         do {
         	bigram.GetBigram(PP,seed); // Generate simulate probability distribution
@@ -337,30 +347,56 @@ double generate_LM_and_sequence(unsigned seed)
         	if(lm_restart % 1000 == 0 && lm_restart > 1) std::cerr << "WARNING: LM restarted " << lm_restart << " times !" << std::endl;
         	if(lm_restart>100) seed++;
 
-		// Generate a sequence from the probability distribution
-		//string_perplexity = jes.AssignPrior(bigram,conditionalLogPP);
-        	string_perplexity = bigram.generateString(sequence,seed) ; //  and calculate string perplexity
 
 		//debug
 		//std::cout<<"Bigram perplexity = "<<bigram_perplexity<<", string = "<<string_perplexity<<", needed perplexity = "<<PP<<"\n";
 
-      	} while( fabs( bigram_perplexity -  PP) / PP > 0.01 || fabs( string_perplexity -  PP) / PP > 0.3); //while(!bigram.FitStringPerplexity(PP,conditionalLogPP,T,seed) && std::abs(string_perplexity-PP)>epsilon);
+      	} while( fabs( bigram_perplexity -  PP) / PP > 0.005); //while(!bigram.FitStringPerplexity(PP,conditionalLogPP,T,seed) && std::abs(string_perplexity-PP)>epsilon);
+	
+	return bigram_perplexity;
+}
+
+// Sample a sequence using the bigram LM
+// return it's perplexity 
+double sample_sequence(unsigned seed, int sentence_ind)
+{
+	// Allocate the training sequence
+  	sequence[sentence_ind].resize(T);
+	//std::cout<<"Sampling a string with a perplexity : "<<PP<<" \n";
+	double  string_perplexity;
+	//std::vector<double> conditionalLogPP;
+	// Create a joint event
+	//jes = Events::JointEventSet(C);
+	// Simulate a bigram distribution and a string with a givenPerplexity
+  	int string_restart = 0;
+	// Sample a string from the bigram LM untill the accuracy is enough
+        do {
+
+        	string_restart++;
+		seed++;
+        	if(string_restart % 1000 == 0 && string_restart > 1) std::cerr << "WARNING: LM restarted " << string_restart << " times !" << std::endl;
+        	if(string_restart>100) seed++;
+
+		// Generate a sequence from the probability distribution
+		//string_perplexity = jes.AssignPrior(bigram,conditionalLogPP);
+        	string_perplexity = bigram.generateString(sequence[sentence_ind],seed) ; //  and calculate string perplexity
+
+		//debug
+		//std::cout<<" String perplexity = "<<string_perplexity<<", needed perplexity = "<<PP<<"\n";
+
+      	} while(fabs( string_perplexity -  PP) / PP > 0.5); //while(!bigram.FitStringPerplexity(PP,conditionalLogPP,T,seed) && std::abs(string_perplexity-PP)>epsilon);
 	 // // || fabs( string_perplexity -  PP) / PP > 0.2);
 	
 	return string_perplexity;
 }
 
-void sample_MNIST(double MNIST[10][PictureAmount][D], double x[T][D])
+void sample_MNIST(std::vector<std::vector<std::vector<double> > >  MNIST, int sentence_ind, std::vector<std::vector<double> > & x)
 {
-	int number_ind[10]; // indices for different numbers
-	for(int i=0;i<10;i++)
-		number_ind[i]=0;
-	
 	//Sample accordingly to the given string
-	int numb=0;
+	int numb;
 	for(int i=0; i < T; i++)
 	{
-		numb = sequence[i];
+		numb = sequence[sentence_ind][i];
 		//std::cout<<"Numb : "<<numb;
 		for(int d=0;d<D;d++)
 	    		x[i][d] = MNIST[numb][number_ind[numb]][d];
@@ -375,8 +411,11 @@ void sample_MNIST(double MNIST[10][PictureAmount][D], double x[T][D])
 
 
 // HMM emission probability (logarithm of it) for a mixture "m" of class "cl"
-double mix_emiss_prob(double x[D], int cl, int m)
+double mix_emiss_prob(std::vector<double> x, int cl, int m)
 {
+	// use uniform distribution for the first run	
+	if(initial_run)
+		return 0; 
 	double sum_for_exp = 0;
 	double norm_fact = 0;
 	// go over all dimensions
@@ -408,7 +447,7 @@ double mix_emiss_prob(double x[D], int cl, int m)
 
 // Full emmision prob of a given class for a data x[D]
 // In the log space !
-double emiss_prob(double x[D], int cl)
+double emiss_prob(std::vector<double> x, int cl)
 {
 	// Ignore mixture with too small weight
 	int start_mix = 0;
@@ -432,7 +471,7 @@ double emiss_prob(double x[D], int cl)
 // Return a proportion of a mixture for a given time step and given class for given data
 // gama(l | cl,Xd)
 // but in a log-space
-double mix_proportion(double x[D], int cl, int l)
+double mix_proportion(std::vector<double> x, int cl, int l)
 {
 	if(l > MixNumb)
 		std::cerr<<"Error we tried to get a weight for mixture "<<l<<" which does not exist yet ( M = "<<MixNumb<<"\n";
@@ -484,7 +523,7 @@ double add_log_scores(double a, double b) {
 /* 					BACKWARD - FORWARD ALGORITHM			*/
 
 // Initialization of a table Q
-int init_Q(double x[T][D])
+int init_Q(std::vector<std::vector<double> > x)
 {
 /* input : training sequence */
 	
@@ -493,9 +532,9 @@ int init_Q(double x[T][D])
 	{
 		Q[0][cl]  = emiss_prob(x[0],cl) + MNIST_unigram_score(cl);
 		// check if the value make sence
-		if(Q[0][cl] > 0)
+		if(Q[0][cl] > epsilon)
 		{
-			std::cout<<"Error during initialization of a Q table : positive log-probability for class "<<cl<<"\n";
+			std::cout<<"Error during initialization of a Q table : positive log-probability ( Q[0][cl] ) for class "<<cl<<"\n";
 			std::cout<<"Emmision prob was "<<emiss_prob(x[0],cl)<<" transition was "<<MNIST_unigram_score(cl)<<"\n";
 			return 0;
 		}
@@ -514,7 +553,7 @@ int init_Q(double x[T][D])
 }
 
 // Forward algorithm
-int forward(int t, int curr_char, double data[T][D])
+int forward(int t, int curr_char, std::vector<std::vector<double> > x)
 {
 // tries to calculate Q[n][curr_char] for our data 
 	if(t==0) // we can use initialization
@@ -542,7 +581,7 @@ int forward(int t, int curr_char, double data[T][D])
 			return 0; // return error code
 		}
 	}
-	Q[t][curr_char] = emiss_prob(data[t],curr_char) + sum;
+	Q[t][curr_char] = emiss_prob(x[t],curr_char) + sum;
 
 	// check if the value make sence
 	if(Q[t][curr_char] > 0)
@@ -557,7 +596,7 @@ int forward(int t, int curr_char, double data[T][D])
 }
 
 // Initialization of a table Q_tilda
-void init_Q_tilda(double x[T][D])
+void init_Q_tilda(std::vector<std::vector<double> > x)
 {
 /* input : training sequence */
 	
@@ -572,7 +611,7 @@ void init_Q_tilda(double x[T][D])
 }
 
 // Backward algorithm
-int backward(int n, int curr_char, double data[T][D])
+int backward(int n, int curr_char, std::vector<std::vector<double> > x)
 {
 	if(n==T-1) // we can use initialization
 	{
@@ -583,7 +622,7 @@ int backward(int n, int curr_char, double data[T][D])
 	// in order to avoid numerical problems
 	// we assign the sum to the first term
 	// We know that the distribution at the last step is such, if next number is 1
-	double sum = Q_tilda[n+1][0] + MNIST_trans_prob(curr_char, 0) + emiss_prob(data[n+1],0);  
+	double sum = Q_tilda[n+1][0] + MNIST_trans_prob(curr_char, 0) + emiss_prob(x[n+1],0);  
 	// Check if we had numerical issues :
 	if(sum == 10000)
 	{
@@ -594,10 +633,10 @@ int backward(int n, int curr_char, double data[T][D])
 	for(int next_char=1;next_char<C;next_char++)
 	{
 		//std::cout<<"Value for "<<prev_char<<" is "<<Q[n-1][prev_char]<<"\n";
-		sum = add_log_scores(sum, Q_tilda[n+1][next_char] + MNIST_trans_prob(curr_char, next_char) + emiss_prob(data[n+1],next_char));  
+		sum = add_log_scores(sum, Q_tilda[n+1][next_char] + MNIST_trans_prob(curr_char, next_char) + emiss_prob(x[n+1],next_char));  
 		if( n == 2 && curr_char == 48)	
 		{
-			std::cout<<"For the next char "<<next_char<<" : Q prev = "<< Q_tilda[n+1][next_char]<<" trans prob ="<<MNIST_trans_prob(curr_char, next_char)<<" emiss = "<<emiss_prob(data[n+1],next_char);  
+			std::cout<<"For the next char "<<next_char<<" : Q prev = "<< Q_tilda[n+1][next_char]<<" trans prob ="<<MNIST_trans_prob(curr_char, next_char)<<" emiss = "<<emiss_prob(x[n+1],next_char);  
 			std::cout<<"\nThe sum is "<<sum<<"\n";
 		}
 		// Check if we had numerical issues :
@@ -614,12 +653,12 @@ int backward(int n, int curr_char, double data[T][D])
 // Forward-backward algorithm, which will compute probabilities of each class C at time-step t given input sequence data
 // It is calucaled in log-space ! 
 // It will be writen into P[t][C] ( it is a global array)
-int Baum_algorithm(double data[T][D])
+int Baum_algorithm(std::vector<std::vector<double> > x)
 {
 	int err_flag;
 
 	// Initialise Q table
-	err_flag = init_Q(data);
+	err_flag = init_Q(x);
 
 	// check numerical issues
 	if(err_flag == 0)  
@@ -631,17 +670,17 @@ int Baum_algorithm(double data[T][D])
 	// Do forward path
 	for(int n=1;n<T;n++){ // go over all timespeps
 		for(int c=0;c<C;c++){ // go over all characters
-			err_flag = forward(n,c,data);
+			err_flag = forward(n,c,x);
 			if(err_flag == 0)  // check numerical issues
 				return 0;
 		}
 	}
 
 	// Do backward path
-	init_Q_tilda(data);
+	init_Q_tilda(x);
 	for(int n=T-2;n>=0;n--){ // go over all timespeps
 		for(int c=0;c<C;c++){ // go over all characters
-			backward(n,c,data);
+			backward(n,c,x);
 			if(err_flag == 0)  // check numerical issues
 				return 0;
 		}
@@ -688,7 +727,7 @@ int Baum_algorithm(double data[T][D])
 	// Get a log of the total probabolity of a sequence for normalization
 	double log_norm = word_total_probability();
 
-	std::cout<<"Normalization factor: "<<log_norm<<"\n";
+	//std::cout<<"Normalization factor: "<<log_norm<<"\n";
 	// Normalize the probabilities
 	for(int n=0;n<T;n++) // go over all timespeps
 		for(int c=0;c<C;c++) // go over all characters
@@ -700,119 +739,144 @@ int Baum_algorithm(double data[T][D])
 /* 						Learning 						*/
 
 // Expectation Maximization algorithm
-void EM(double data[T][D], int iterNumb)
+void EM()
 {
-	std::cout<<"I do EM ...\n";
-	double sum, gama_cl, gama_c;
-	int err_flag;
-	for(int iter = 0; iter<iterNumb; iter++)
+	double err_flag;
+	std::vector<std::vector<std::vector<double> > >  MNIST;
+	// Allocate vectors for MNIST pictures
+  	MNIST.resize(C);
+  	for (int i = 0; i < C; ++i) {
+   		MNIST[i].resize(PictureAmount);
+
+    		for (int j = 0; j < PictureAmount; ++j)
+      			MNIST[i][j].resize(D);
+  	}
+	// read example observations 
+	err_flag = read_mnist(MNIST,"MNIST_data");
+
+	// check if the reading was succesfull
+	if(err_flag)
 	{
-		std::cout<<"We have "<<MixNumb<<" mixtures and we do iteration "<< iter<<" .\n";
+		std::cerr<<"Error with reading MNIST dataset!\n";
+		return;
+	}
 
-		// first - get probabilities Pt(c / x1_N)
-		err_flag = Baum_algorithm(data);
+	// Allocate vectors for sum_means
+	std::vector<std::vector<std::vector<double> > > sum_means;
+  	sum_means.resize(C);
+  	for (int i = 0; i < C; ++i) {
+   		sum_means[i].resize(L);
 
-		// check if we had numerical problems
-		if(err_flag == 0)
+    		for (int j = 0; j < L; ++j)
+      			sum_means[i][j].resize(D);
+  	}
+	
+	// Allocate vectors for sum_gama_cl
+	std::vector<std::vector<double> >  sum_gama_cl;
+  	sum_gama_cl.resize(C);
+  	for (int i = 0; i < C; ++i) 
+   		sum_gama_cl[i].resize(L);
+
+	// Allocate vector for sum_gama_c
+	std::vector<double>  sum_gama_c;
+	sum_gama_c.resize(C);
+
+	// Allocate vector for sum_variances
+	std::vector<double>  sum_variances;
+	sum_variances.resize(D);
+
+	//  Allocate vector for training data
+	std::vector<std::vector<double> >  x; 
+	x.resize(T);
+  	for (int i = 0; i < T; ++i) 
+   		x[i].resize(D);
+
+	// Do EM iteration for the current amount of mixture densities
+	for(int it=0;it<ITER;it++)
+	{
+		for(int i=0;i<10;i++)
+			number_ind[i]=0;
+
+		std::cout<<"I do "<<it+1<<" iteration of EM for "<<MixNumb<<" mixtures...\n";
+
+		// initialize array of probabilities
+		for(int c=0;c<C;c++)
 		{
-			std::cout<<" Have got numerical problems during "<<iter+1<<" iteration of EM algorithm!\n";
-			return;
+			for(int l=0;l<L;l++)
+			{
+				for(int d=0;d<D;d++)
+					sum_means[c][l][d]=0;
+				sum_gama_cl[c][l]=0;
+			}
+			sum_gama_c[c] = 0;
 		}
-
-		// check normalization
-		err_flag = test_prob_norm();
-		if(err_flag == 0)
+		for(int d=0;d<D;d++)
+			sum_variances[d] = 0;
+		
+		// Calculate the contribution to the sums from each sentence
+		for(int sentence = 0; sentence < S; sentence++)
 		{
-			std::cout<<" Have got non-normalized probability distributrion during "<<iter+1<<" iteration of EM algorithm!\n";
-			return;
-		}
+			std::cout<<"Working with the sentence : "<<sentence+1<<"\n";
 
-		// Debug
-		show_means(6);
-		//debug(data);
+			sample_MNIST(MNIST,sentence, x); // Constuct training example			
+
+			// Contribute to the sums
+			addToSum(x, sum_means, sum_gama_cl, sum_gama_c, sum_variances);
+
+			//debug
+			/* for(int c=0;c<C;c++)
+				std::cout<<"Sum for class "<<c<<" : "<<sum_gama_c[c]<<"\n"; */
+			/*for(int c=0;c<C;c++)
+				for(int l=0;c<;c++)
+					 sum_gama_cl[c][l]*/
+		}
 
 		// Reestimate means
-		for(int c=0;c<C;c++) // for all classes
+		for(int c=0;c<C;c++)
+			for(int l=0;l<MixNumb;l++)
+				for(int d=0;d<D;d++)
+					if(sum_gama_cl[c][l] > epsilon) 
+						Means[c][l][d] = sum_means[c][l][d] / sum_gama_cl[c][l];
+
+		// Reestimate weights
+		for(int c=0;c<C;c++) {
+			if(sum_gama_c[c] < epsilon)
+				continue;
+			for(int l=0;l<MixNumb;l++) {
+				MixWeights[c][l] =  sum_gama_cl[c][l] / sum_gama_c[c];
+			}
+		}
+
+		// Check Mixture weighs for single densities
+		if(MixNumb ==1)
+			for(int c=0;c<C;c++)
+				for(int l=0;l<MixNumb;l++)
+					if(MixWeights[c][l] != 1) 
+						std::cerr<<"Mixture weight at the beginning for class "<<c<<" mixture "<<l<<" is not one, but "<<MixWeights[c][l]<<" !\n";
+
+		// Check Mixture weighs normalization
+		for(int c=0;c<C;c++)
 		{
-			for (int l=0;l<MixNumb;l++) // for all Gaussians in the mistures
+			err_flag = check_mix_norm(c);
+			if(err_flag == 0)
 			{
-				//std::cout<<"I am reestimating mean for a class "<<c<<" and mixture "<<l<<"...\n";
-				// Calculate normalization sum
-				gama_cl = 0; // sum gama (c,l | data)
-				gama_c=0; // sum gama (c | data)
-
-				for(int t=0;t<T;t++) // go over all time-steps
-				{
-					MixSignif[t][c][l] = mix_proportion(data[t], c,l);
-
-					//Check if mixture significance makes sence
-					if(MixSignif[t][c][l] >0 ) 
-						std::cerr<<"Mixture significance for time step "<<t<<" class "<<c<<" mixture "<<l<<"is more than one! It's = e^"<<MixSignif[t][c][l] <<"\n";
-					if(std::isnan(MixSignif[t][c][l]))
-						std::cerr<<"Mixture significance: "<<l<<" "<<" for class "<<c<<" at time step "<<t<<" :  is NAN ! \n";
-					
-					gama_cl = gama_cl + exp(P[t][c] + MixSignif[t][c][l]);
-					gama_c = gama_c + exp(P[t][c]);
-
-				}
-				
-				if(gama_cl < epsilon) 
-				{
-					//std::cout<<"Kept the mean for class "<<c<<" because of the probability sum = "<<gama_cl<<"\n";
-					continue; //to avoid devition on zero
-				}
-				//std::cout<<"In EM norm for class "<<c<<" = "<<gama_cl<<"\n";
-
-				// Calculate the sum for the new mean
-				for(int d=0;d<D;d++) // for all dimensions
-				{
-					sum = 0;
-					for(int t=0;t<T;t++) // go over all time-steps
-						sum = sum + exp(P[t][c] + MixSignif[t][c][l]) * data[t][d];
-					Means[c][l][d] = sum / gama_cl;
-				}
-	
-				// Reestimate weights
-				MixWeights[c][l] = gama_cl / gama_c;
-				if(MixNumb ==1 && MixWeights[c][l] != 1) 
-						std::cerr<<"Mixture weight at the beginning for class "<<c<<" mixture "<<l<<"is not one, but "<<MixWeights[c][l]<<" !\n";
-
-				// Check Mixture weighs normalization
-				err_flag = check_mix_norm(c);
-				if(err_flag == 0)
-				{
-					std::cout<<" Have got non-normalized Mixture Weights on "<<iter+1<<" iteration fort the class "<<c<<"!\n";
-					return;
-				}
+				std::cout<<" Have got non-normalized Mixture Weights on "<<it<<" iteration fort the class "<<c<<"!\n";
+				return;
 			}
 		}
 
 		// Reestimate variances
 		for(int d=0;d<D;d++)
-		{
-			sum = 0;
-			for(int c=0;c<C;c++) // for all classes
-				for (int l=0;l<MixNumb;l++) // for all Gaussians in the mistures
-					for(int t=0;t<T;t++) // go over all time-steps
-						sum = sum + exp(P[t][c] + MixSignif[t][c][l] ) * (data[t][d] - Means[c][l][d])*(data[t][d] - Means[c][l][d]);
-			Variances[d] = sqrt(sum/T);
+			Variances[d] = sqrt(sum_variances[d]/S*T);
 
 
-			// Regularization
-			/*if(Variances[d] < 50)
-				Variances[d] = 50;*/
-		}
+		// Regularization
+		/*if(Variances[d] < 50)
+			Variances[d] = 50;*/
 
-		// Check Mixture weighs normalization
-		/*err_flag = check_mix_norm(1);
-		if(err_flag == 0)
-		{
-			std::cout<<" Have got non-normalized Mixture Weights on "<<iter+1<<" iteration fort the class 1!\n";
-			return;
-		}*/
 
 		// Split
-		if(iter == iterNumb-1) // at the last iteration
+		if(it == ITER-1) // at the last iteration
 		{
 			if(MixNumb < L) // if we still have less means than we want:
 			{
@@ -831,39 +895,83 @@ void EM(double data[T][D], int iterNumb)
 					}
 				}
 				MixNumb = MixNumb * 2;
-				iter = -1; // start the first iteration for the new means
+				it = -1; // start the first iteration for the new means
 			}
 		}
 
-		// Check if a few classes are two close to each other
-		/*if(iter%2 == 0)
-			continue; // do checking once in 2 time steps
-		double diff; // difference between means
-		for(int cl1=0;cl1<C;cl1++)
-		{
-			for(int cl2=cl1+1;cl2<C;cl2++)
-			{
-				diff = dist(cl1,cl2);
-				if(cl1==0 && cl2 ==3)
-					std::cout<<"Distance between 0 and 3 = "<<diff<<"\n";
-				if(diff < 0.01) // if they are too close
-				{
-					std::cout<<"Classes "<<cl1<<" and "<<cl2<<" collapsed!\n";
-					// Reset one of them to random values
-	  				srand (time(NULL));
-					std::default_random_engine generator;
-  					std::uniform_real_distribution<double> distribution(0.0,1000);
-					for(int d=0;d<D;d++)
-						for(int l=0;l<MixNumb;l++)
-							Means[cl1][l][d] = distribution(generator); // generate random number
-					// Reset variances
-					for(int d=0;d<D;d++)
-						Variances[d] = 120;
-				}
-			}
-		}*/
+		initial_run = false;
+		
+		// Evaluate
+		double err_rate =  evaluate();
+		std::cout<<"After "<<it+1<<" iteration for "<<MixNumb<<" mixtures : Error rate = "<<err_rate<<"%\n";
 	}
 }
+
+
+// Add the contribution of the current sentence to the whole sum for gama_cl and gama_c
+void addToSum(std::vector<std::vector<double> > x, std::vector<std::vector<std::vector<double> > > & sum_means, std::vector<std::vector<double> >  & sum_gama_cl, std::vector<double> & sum_gama_c, std::vector<double>  sum_variances)
+{
+	double sum;
+	int err_flag;
+	//std::cout<<"We learn "<<MixNumb<<" mixtures .\n";
+
+	// first - get probabilities Pt(c / x1_N)
+	err_flag = Baum_algorithm(x);
+		
+	// check if we had numerical problems
+	if(err_flag == 0)
+	{
+		std::cout<<" Have got numerical problems during Baum-Welch algorithm!\n";
+		return;
+	}
+
+	// check normalization
+	err_flag = test_prob_norm();
+	if(err_flag == 0)
+	{
+		std::cout<<" Have got non-normalized probability distributrion during EM algorithm!\n";
+		return;
+	}
+
+	// Debug
+	//show_means(6);
+	//debug(data);
+
+	// Add contribution of the sentence to the sums
+	for(int c=0;c<C;c++) // for all classes
+	{
+		for (int l=0;l<MixNumb;l++) // for all Gaussians in the mistures
+		{
+			for(int t=0;t<T;t++) // go over all time-steps
+			{
+				MixSignif[t][c][l] = mix_proportion(x[t], c,l);
+					
+				//Check if mixture significance makes sence
+				if(MixSignif[t][c][l] >0 ) 
+					std::cerr<<"Mixture significance for time step "<<t<<" class "<<c<<" mixture "<<l<<"is more than one! It's = e^"<<MixSignif[t][c][l] <<"\n";
+				if(std::isnan(MixSignif[t][c][l]))
+					std::cerr<<"Mixture significance: "<<l<<" "<<" for class "<<c<<" at time step "<<t<<" :  is NAN ! \n";
+	
+				// Contribute to the sum_gama_cl
+				sum_gama_cl[c][l]+=exp(P[t][c] + MixSignif[t][c][l]);
+
+				// Contribute to the sum_means 
+				for(int d=0;d<D;d++)
+					for(int t=0;t<T;t++) 
+						sum_means[c][l][d]+=exp(P[t][c] + MixSignif[t][c][l]) * x[t][d];
+
+				// Contribute to the sum_variances
+				for(int d=0;d<D;d++) 
+					sum_variances[d]+=exp(P[t][c] + MixSignif[t][c][l] ) * (x[t][d] - Means[c][l][d])*(x[t][d] - Means[c][l][d]);
+ 			}
+		}
+
+		// Contribute to the gama_c
+		for(int t=0;t<T;t++)
+			sum_gama_c[c]+= exp(P[t][c]);
+	}
+}
+
 			
 	
 // Log - probability of a given word
@@ -904,7 +1012,7 @@ int test_prob_norm()
 		
 
 // Was used to debug a Forward - Backward algorithm
-void debug(double x[T][D])
+void debug(std::vector<std::vector<double> > x)
 {
 	/*
 	std::cout<<"Rounded Observation x[2] : \n";
@@ -1011,23 +1119,28 @@ double evaluate()
 	for(int c1=0;c1<C;c1++)
 		for(int c2=0;c2<C;c2++)
 			confusion[c1][c2] = 0;
-	// calculate error rate	
-	for(int n=0;n<T;n++) // for each time step
+
+	for(int sentence_ind=0; sentence_ind<S; sentence_ind++) // for each sentence
 	{
-		max_val=P[n][0];
-		max = 0;
-		for(int c=1;c<C;c++)
+		// sum up error rate
+		for(int n=0;n<T;n++) // for each time step
 		{
-			if(P[n][c] > max_val)
+			max_val=P[n][0];
+			max = 0;
+			for(int c=1;c<C;c++)
 			{
-				max_val = P[n][c];
-				max = c;
+				if(P[n][c] > max_val)
+				{
+					max_val = P[n][c];
+					max = c;
+				}
 			}
+			if(max != sequence[sentence_ind][n])
+				err_rate++;
+			confusion[sequence[sentence_ind][n]][max] ++; 
 		}
-		if(max != sequence[n])
-			err_rate++;
-		confusion[sequence[n]][max] ++; 
 	}
+
 	// print confusion matrix
 	std::cout<<"Confusion matrix : \n";
 	for(int c1=0;c1<C;c1++)
@@ -1036,7 +1149,7 @@ double evaluate()
 			std::cout<<confusion[c1][c2]<<" ";
 		std::cout<<"\n";
 	}
-	return err_rate * 100.0 / T;
+	return err_rate * 100.0 / (T*S);
 }
 
 // Will calculate the L2-distance between means, normalised w.r.t. the range of values
@@ -1083,7 +1196,7 @@ bool check_mix_norm(int c)
 	{
 		sum+=MixWeights[c][l];
 	}
-	if(fabs(sum - 1) > 0.2)	
+	if(fabs(sum - 1) > 0.4)	
 	{
 		std::cout<<"The mixture weights sum for class "<<c<<" = "<<sum<<"\n";
 		return 0;
@@ -1091,3 +1204,31 @@ bool check_mix_norm(int c)
 	else
 		return 1;
 }
+
+		// Check if a few classes are two close to each other
+		/*if(iter%2 == 0)
+			continue; // do checking once in 2 time steps
+		double diff; // difference between means
+		for(int cl1=0;cl1<C;cl1++)
+		{
+			for(int cl2=cl1+1;cl2<C;cl2++)
+			{
+				diff = dist(cl1,cl2);
+				if(cl1==0 && cl2 ==3)
+					std::cout<<"Distance between 0 and 3 = "<<diff<<"\n";
+				if(diff < 0.01) // if they are too close
+				{
+					std::cout<<"Classes "<<cl1<<" and "<<cl2<<" collapsed!\n";
+					// Reset one of them to random values
+	  				srand (time(NULL));
+					std::default_random_engine generator;
+  					std::uniform_real_distribution<double> distribution(0.0,1000);
+					for(int d=0;d<D;d++)
+						for(int l=0;l<MixNumb;l++)
+							Means[cl1][l][d] = distribution(generator); // generate random number
+					// Reset variances
+					for(int d=0;d<D;d++)
+						Variances[d] = 120;
+				}
+			}
+		}*/
